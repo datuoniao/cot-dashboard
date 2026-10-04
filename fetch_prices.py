@@ -19,6 +19,12 @@
 
 注: 国债主口径为【收益率】; 收益率上行对应债券价格下行, 页面已注明。
 输出: data/prices.json
+
+容错策略 (两级):
+  * 整体失败: 某数据源(东财/财政部)本次【所有】品种都取不到 -> 直接中止, 不写文件,
+    保留上一份可用数据 (避免空序列覆盖 + 看板静默失真)。
+  * 部分失败: 同一数据源中部分品种取不到 -> 沿用上一份 prices.json 中该品种的序列,
+    避免个别合约抖动导致整条价格线中断 (日志会打印"沿用上次"提示)。
 """
 import csv
 import io
@@ -28,7 +34,8 @@ import shutil
 import subprocess
 import sys
 import time
-from datetime import datetime
+import urllib.parse
+from datetime import datetime, timezone
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(BASE, "data")
@@ -46,6 +53,31 @@ EM_KLINE = ("https://push2his.eastmoney.com/api/qt/stock/kline/get"
 UST_CSV = ("https://home.treasury.gov/resource-center/data-chart-center/"
            "interest-rates/daily-treasury-rates.csv/{y}/all"
            "?type=daily_treasury_yield_curve&field_tdr_date_value={y}&page&_format=csv")
+
+# 备用源: Yahoo Finance (东方财富会屏蔽 GitHub Actions 的美国机房 IP,
+# runner 上东财全部无数据时自动切换到 Yahoo)
+YM_KLINE = ("https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
+            "?range=max&interval=1d&includePrePost=false")
+YAHOO_SYMBOLS = {
+    "122.XAU":   "GC=F",   # COMEX 黄金期货主力
+    "122.XAG":   "SI=F",   # COMEX 白银期货主力
+    "102.CL00Y": "CL=F",   # NYMEX WTI 原油主力
+    "103.ZS00Y": "ZS=F",   # CBOT 大豆主力
+    "103.TY00Y": "ZN=F",   # CBOT 10 年期国债期货
+    "103.US00Y": "ZB=F",   # CBOT 30 年期国债期货
+    "103.UL00Y": "UB=F",   # CBOT 超长期国债期货
+}
+
+try:
+    from zoneinfo import ZoneInfo
+    _NY = ZoneInfo("America/New_York")
+except Exception:                       # pragma: no cover
+    _NY = timezone.utc
+
+
+def _yahoo_ts_to_date(ts: int) -> str:
+    d = datetime.fromtimestamp(int(ts), _NY)
+    return f"{d.year:04d}-{d.month:02d}-{d.day:02d}"
 
 START_YEAR = 2006
 
@@ -91,6 +123,47 @@ def http_get(url: str, timeout: int = 60) -> bytes | None:
 # 东财对外盘连续合约有较严的频率限制, 连续快速请求会被断开 (curl 56 / http 000),
 # 因此每个东财请求之间留出间隔, 由 http_get 内部再做 3 次重试。
 EM_DELAY = 1.2
+
+
+def fetch_yahoo(sym: str) -> dict:
+    """Yahoo v8 chart -> {date: close} (仅收非空收盘价)"""
+    url = YM_KLINE.format(sym=urllib.parse.quote(sym))
+    blob = http_get(url)
+    time.sleep(EM_DELAY)
+    if not blob:
+        return {}
+    try:
+        d = json.loads(blob.decode("utf-8", "replace"))
+        res = (d.get("chart") or {}).get("result") or []
+        if not res:
+            return {}
+        stamps = res[0].get("timestamp") or []
+        closes = (((res[0].get("indicators") or {}).get("quote") or [{}])[0]
+                  .get("close") or [])
+    except Exception:
+        return {}
+    out = {}
+    for ts, c in zip(stamps, closes):
+        if c is None:
+            continue
+        try:
+            out[_yahoo_ts_to_date(ts)] = float(c)
+        except (ValueError, OverflowError):
+            continue
+    return out
+
+
+def fetch_price_series(sid: str) -> tuple[dict, str]:
+    """优先东财, 失败自动切 Yahoo。返回 ({date: close}, 实际使用的源)。"""
+    series = fetch_eastmoney(sid)
+    if series:
+        return series, "eastmoney"
+    ys = YAHOO_SYMBOLS.get(sid)
+    if ys:
+        series = fetch_yahoo(ys)
+        if series:
+            return series, "yahoo"
+    return {}, "eastmoney"
 
 
 def fetch_eastmoney(sid: str) -> dict:
@@ -154,6 +227,15 @@ def main():
     result = {"fetched_at": datetime.now().astimezone().isoformat(timespec="seconds"),
               "instruments": {}}
 
+    # 上一份结果: 供"部分失败时沿用旧序列"使用 (整体失败仍会中止, 见文件末尾)
+    prev = {}
+    if os.path.exists(os.path.join(DATA, "prices.json")):
+        try:
+            with open(os.path.join(DATA, "prices.json"), encoding="utf-8") as f:
+                prev = (json.load(f) or {}).get("instruments") or {}
+        except Exception:
+            prev = {}
+
     # 财政部 CSV 按年抓取一次并同时取多列, 避免每个国债品种重复请求
     ust_cols = sorted({UST_COLUMNS[k] for k, v in META.items() if v[1] == "ust"})
     ust = {c: {} for c in ust_cols}
@@ -163,12 +245,12 @@ def main():
 
     for key, (name, source, symbol, unit, note) in META.items():
         if source == "eastmoney":
-            series = fetch_eastmoney(symbol)
+            series, src_used = fetch_price_series(symbol)
         else:
-            series = ust.get(UST_COLUMNS.get(key, ""), {})
+            series, src_used = ust.get(UST_COLUMNS.get(key, ""), {}), "ust"
         dates = sorted(series)
         result["instruments"][key] = {
-            "name": name, "source": source, "symbol": symbol,
+            "name": name, "source": src_used, "symbol": symbol,
             "unit": unit, "note": note,
             "series": {d: series[d] for d in dates},
         }
@@ -182,10 +264,13 @@ def main():
     for key, (name, source, symbol, unit, note) in ALT.items():
         if key not in result["instruments"]:
             continue
-        series = fetch_eastmoney(symbol) if source == "eastmoney" else {}
+        if source == "eastmoney":
+            series, src_used = fetch_price_series(symbol)
+        else:
+            series, src_used = {}, source
         dates = sorted(series)
         result["instruments"][key]["alt"] = {
-            "name": name, "source": source, "symbol": symbol,
+            "name": name, "source": src_used, "symbol": symbol,
             "unit": unit, "note": note,
             "series": {d: series[d] for d in dates},
         }
@@ -195,7 +280,7 @@ def main():
         else:
             print(f"  [{key:8s}] {symbol:10s}  无数据! ({name})", file=sys.stderr)
 
-    # 防护: 若某个数据源【整体】不可用(如东财限流/网络中断), 直接中止而不是写出空序列,
+    # 防护(第一级): 若某个数据源【整体】不可用(如东财限流/网络中断), 直接中止而不是写出空序列,
     # 否则会用空价格覆盖上一份可用数据, 且看板不会报错。个别品种缺失仍照常继续。
     for src, label in (("eastmoney", "东方财富"), ("ust", "美国财政部")):
         keys = [k for k, v in META.items() if v[1] == src]
@@ -203,6 +288,42 @@ def main():
             print(f"[fetch_prices] 严重错误: {label} 行情整体获取失败(疑似限流或网络不可达), "
                   f"本次不写出 prices.json, 保留上一份可用数据。", file=sys.stderr)
             sys.exit(1)
+
+    # 防护(第二级): 同一数据源中仅有【部分】品种失败时, 沿用上一份的旧序列,
+    # 避免个别合约(尤其新增的国债期货 alt)抖动导致价格线中断。
+    carried = []
+
+    def _carry(key, sub=None):
+        node = prev.get(key) or {}
+        if sub:
+            node = node.get(sub) or {}
+        old = node.get("series") or {}
+        if not old:
+            return False
+        target = result["instruments"][key][sub] if sub else result["instruments"][key]
+        target["series"] = old
+        carried.append(f"{key}({'期货价' if sub else '主序列'}, {len(old)}点, 末至{max(old)})")
+        return True
+
+    for src in ("eastmoney", "ust"):
+        keys = [k for k, v in META.items() if v[1] == src]
+        empty = [k for k in keys if not result["instruments"][k]["series"]]
+        ok = [k for k in keys if result["instruments"][k]["series"]]
+        if empty and ok:
+            for k in empty:
+                _carry(k)
+
+    alt_keys = [k for k in ALT if k in result["instruments"]]
+    if alt_keys:
+        empty_alt = [k for k in alt_keys if not result["instruments"][k]["alt"]["series"]]
+        ok_alt = [k for k in alt_keys if result["instruments"][k]["alt"]["series"]]
+        if empty_alt and ok_alt:
+            for k in empty_alt:
+                _carry(k, "alt")
+
+    if carried:
+        print("[fetch_prices] 注意: 部分品种本次无返回, 已沿用上一份序列 -> " + "; ".join(carried),
+              file=sys.stderr)
 
     out_path = os.path.join(DATA, "prices.json")
     with open(out_path, "w", encoding="utf-8") as f:
