@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CFTC 持仓看板 · 持仓与价格对照</title>
+<script src="vendor/echarts.min.js"></script>
+<script src="data/cot_data.js"></script>
+<style>
+  :root{
+    --bg:#0b0f17; --panel:#121826; --panel2:#161d2e; --line:#243044;
+    --txt:#e8eef7; --muted:#8b9bb4; --accent:#4c8dff;
+    --up:#f04438; --down:#12b76a; --gold:#f5b942; --purple:#a78bfa; --cyan:#22d3ee;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:radial-gradient(1200px 600px at 20% -10%,#16203a 0%,var(--bg) 55%) fixed;
+    color:var(--txt);
+    font-family:"Segoe UI","Microsoft YaHei",system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
+    display:flex;flex-direction:column;height:100vh;overflow:hidden;
+  }
+  header{padding:16px 22px 10px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+  h1{font-size:19px;margin:0;font-weight:650;letter-spacing:.3px}
+  h1 span{color:var(--accent)}
+  .meta{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto}
+  .chip{
+    background:var(--panel2);border:1px solid var(--line);border-radius:999px;
+    padding:4px 11px;font-size:12px;color:var(--muted);white-space:nowrap
+  }
+  .chip b{color:var(--txt);font-weight:600}
+  .bar{display:flex;align-items:center;gap:14px;padding:0 22px 10px;flex-wrap:wrap}
+  .tabs{display:flex;gap:6px;background:var(--panel);border:1px solid var(--line);
+        border-radius:11px;padding:4px}
+  .tabs button{
+    background:transparent;border:0;color:var(--muted);padding:7px 15px;border-radius:8px;
+    cursor:pointer;font-size:13.5px;font-family:inherit;transition:.15s;white-space:nowrap
+  }
+  .tabs button:hover{color:var(--txt)}
+  .tabs button.on{background:linear-gradient(180deg,#2a3c5e,#1d2b45);color:#fff;
+                  box-shadow:inset 0 0 0 1px #3a5580}
+  .grp{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--muted)}
+  .seg{display:flex;background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:3px}
+  .seg button{
+    background:transparent;border:0;color:var(--muted);padding:5px 11px;border-radius:6px;
+    cursor:pointer;font-size:12.5px;font-family:inherit;transition:.15s;white-space:nowrap
+  }
+  .seg button.on{background:#26344f;color:#fff}
+  main{flex:1;min-height:0;padding:0 16px 8px;display:flex;flex-direction:column;gap:8px}
+  .card{
+    background:linear-gradient(180deg,rgba(28,38,58,.72),rgba(18,24,38,.72));
+    border:1px solid var(--line);border-radius:14px;flex:1;min-height:0;position:relative;
+    box-shadow:0 10px 30px rgba(0,0,0,.28)
+  }
+  #chart{width:100%;height:100%}
+  .stat{display:flex;gap:10px;flex-wrap:wrap}
+  .k{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+     padding:7px 13px;font-size:12px;color:var(--muted);min-width:126px}
+  .k b{display:block;font-size:15px;color:var(--txt);margin-top:3px;font-weight:600;
+       font-variant-numeric:tabular-nums}
+  .k b.up{color:var(--up)} .k b.down{color:var(--down)}
+  footer{padding:6px 22px 12px;font-size:11.5px;color:#61708a;display:flex;gap:16px;flex-wrap:wrap}
+  .note{color:var(--gold);font-size:11.5px}
+  .hide{display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>CFTC 持仓看板 · <span>持仓 × 价格</span></h1>
+  <div class="meta">
+    <div class="chip">最新报告周 <b id="m-report">-</b></div>
+    <div class="chip">数据更新 <b id="m-updated">-</b></div>
+    <div class="chip" id="m-src">-</div>
+  </div>
+</header>
+
+<div class="bar">
+  <div class="tabs" id="tabs"></div>
+  <div class="grp">持仓口径
+    <div class="seg" id="seg-metric">
+      <button data-v="net" class="on">净持仓</button>
+      <button data-v="long">多头</button>
+      <button data-v="short">空头</button>
+    </div>
+  </div>
+  <div class="grp">标度
+    <div class="seg" id="seg-scale">
+      <button data-v="abs" class="on">合约数</button>
+      <button data-v="index">COT Index</button>
+    </div>
+  </div>
+  <div class="grp hide" id="grp-px">价格口径
+    <div class="seg" id="seg-px">
+      <button data-v="both" class="on">收益率＋期货价</button>
+      <button data-v="fut">仅期货价</button>
+      <button data-v="yield">仅收益率</button>
+    </div>
+  </div>
+  <div class="grp">分组
+    <div class="seg" id="seg-group"></div>
+  </div>
+</div>
+
+<main>
+  <div class="stat" id="stats"></div>
+  <div class="card"><div id="chart"></div></div>
+</main>
+
+<footer>
+  <div>持仓来源：CFTC Commitments of Traders（官方历史档案，分项报告 / TFF 报告，期货+期权合并口径）</div>
+  <div id="f-price">价格来源：-</div>
+  <div class="note" id="f-note"></div>
+</footer>
+
+<script>
+const UP = '#f04438', DOWN = '#12b76a';
+// 分组配色刻意避开价格线的琥珀色(#f5b942)
+const GROUP_COLORS = ['#4c8dff', '#22d3ee', '#a78bfa', '#f472b6'];
+// 国债期货绝对价格线（第二价格口径）: 淡冰蓝虚线, 与价格琥珀色/分组色均可区分
+const PXFUT = '#cbd5e1';
+let DATA = null, cur = null;
+const state = { inst: 'gold', metric: 'net', scale: 'abs', group: '__primary__', px: 'both' };
+
+function fmt(n, d) {
+  if (n === null || n === undefined) return '-';
+  if (d !== undefined) return Number(n).toFixed(d);
+  return Number(n).toLocaleString('en-US');
+}
+function fmtSigned(n) {
+  if (n === null || n === undefined) return '-';
+  return (n > 0 ? '+' : '') + Number(n).toLocaleString('en-US');
+}
+function pick(o, i) { return o ? o[i] : null; }
+
+/* ---------- 初始化 ---------- */
+let booted = false;
+function boot() {
+  if (booted) return;
+  booted = true;
+  DATA = window.COT_DATA;
+  if (!DATA) {
+    fetch('data/cot_data.json').then(r => r.json()).then(d => { DATA = d; init(); })
+      .catch(e => { document.getElementById('chart').innerHTML =
+        '<div style="padding:40px;color:#8b9bb4">数据未找到。请先运行 run_update.bat 生成 data/cot_data.js</div>'; });
+    return;
+  }
+  init();
+}
+
+function init() {
+  document.getElementById('m-report').textContent = DATA.latest_report_date || '-';
+  document.getElementById('m-updated').textContent = (DATA.updated_at || '').slice(0, 16).replace('T', ' ');
+  state.inst = Object.keys(DATA.instruments)[0];
+  // 支持 URL 直达: ?inst=us10y&metric=net&scale=index&group=__all__
+  const q = new URLSearchParams(location.search);
+  if (q.get('inst') && DATA.instruments[q.get('inst')]) state.inst = q.get('inst');
+  if (['net', 'long', 'short'].includes(q.get('metric'))) state.metric = q.get('metric');
+  if (['abs', 'index'].includes(q.get('scale'))) state.scale = q.get('scale');
+  if (['__primary__', '__all__'].includes(q.get('group'))) state.group = q.get('group');
+  if (['both', 'fut', 'yield'].includes(q.get('px'))) state.px = q.get('px');
+  if (state.scale === 'index') state.metric = 'net';
+  document.querySelectorAll('#seg-metric button').forEach(b => b.classList.toggle('on', b.dataset.v === state.metric));
+  document.querySelectorAll('#seg-scale button').forEach(b => b.classList.toggle('on', b.dataset.v === state.scale));
+
+  // 事件只绑定一次（容器级委托）
+  document.getElementById('tabs').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    state.inst = b.dataset.k;
+    state.group = '__primary__';
+    buildTabs(); buildGroupSeg(); render();
+  });
+  document.getElementById('seg-group').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    state.group = b.dataset.v;
+    buildGroupSeg(); render();
+  });
+  bindSeg('seg-metric', v => { state.metric = v; if (state.scale === 'index' && v !== 'net') setScale('abs'); render(); });
+  bindSeg('seg-scale', v => { setScale(v); render(); });
+  bindSeg('seg-px', v => { state.px = v; render(); });
+  buildTabs();
+  buildGroupSeg();
+  render();
+}
+
+function setScale(v) {
+  state.scale = v;
+  document.querySelectorAll('#seg-scale button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
+  if (v === 'index') { state.metric = 'net';
+    document.querySelectorAll('#seg-metric button').forEach(b => b.classList.toggle('on', b.dataset.v === 'net')); }
+}
+function bindSeg(id, cb) {
+  const el = document.getElementById(id);
+  el.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    el.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on'); cb(b.dataset.v);
+  });
+}
+function buildTabs() {
+  document.getElementById('tabs').innerHTML = Object.entries(DATA.instruments)
+    .map(([k, v]) => `<button data-k="${k}" class="${k === state.inst ? 'on' : ''}">${v.name}</button>`).join('');
+}
+function buildGroupSeg() {
+  cur = DATA.instruments[state.inst];
+  const prim = cur.primary_group;
+  document.getElementById('seg-group').innerHTML =
+    `<button data-v="__primary__" class="${state.group === '__primary__' ? 'on' : ''}">${cur.groups[prim].label}</button>` +
+    `<button data-v="__all__" class="${state.group === '__all__' ? 'on' : ''}">全部对比</button>`;
+  // 仅国债品种提供「收益率 / 期货绝对价格」双口径切换
+  const hasAlt = !!cur.price_alt;
+  document.getElementById('grp-px').classList.toggle('hide', !hasAlt);
+  document.querySelectorAll('#seg-px button').forEach(b => b.classList.toggle('on', b.dataset.v === state.px));
+}
+
+/* ---------- 渲染 ---------- */
+function render() {
+  cur = DATA.instruments[state.inst];
+  const isIndex = state.scale === 'index';
+  const groupKey = state.group === '__primary__' ? cur.primary_group : null;
+  const showAll = state.group === '__all__';
+
+  // 统计卡
+  const li = cur.dates.length - 1;
+  const prim = cur.groups[cur.primary_group];
+  const netNow = pick(prim.net, li), idxNow = pick(prim.net_index, li);
+  const priceNow = pick(cur.price_values, li);
+  const altNow = cur.price_alt ? pick(cur.price_alt_values, li) : null;
+  document.getElementById('stats').innerHTML = `
+    <div class="k">报告日<b>${cur.dates[li]}</b></div>
+    <div class="k">${prim.label}·净持仓<b class="${netNow > 0 ? 'up' : 'down'}">${fmtSigned(netNow)}</b></div>
+    <div class="k">多头 / 空头<b>${fmt(pick(prim.long, li))} / ${fmt(pick(prim.short, li))}</b></div>
+    <div class="k">COT Index (3年)<b>${fmt(idxNow, 1)}</b></div>
+    <div class="k">总持仓 OI<b>${fmt(pick(cur.oi, li))}</b></div>
+    <div class="k">${cur.price.name}<b>${fmt(priceNow, 2)} ${cur.price.unit || ''}</b></div>` +
+    (cur.price_alt ? `
+    <div class="k">${cur.price_alt.name}<b>${fmt(altNow, 3)} ${cur.price_alt.unit || ''}</b></div>` : '');
+
+  // 价格口径: both = 收益率 + 期货绝对价 同时展示
+  const hasAlt = !!cur.price_alt;
+  const pxMode = hasAlt ? state.px : 'yield';
+  const showYield = pxMode !== 'fut';
+  const showFut = hasAlt && pxMode !== 'yield';
+
+  // 系列
+  const series = [];
+  const legend = [];
+  if (showAll) {
+    cur.group_order.forEach((gk, i) => {
+      const g = cur.groups[gk];
+      const isPrim = gk === cur.primary_group;
+      const nm = g.label + '·' + metricLabel(state.metric);
+      series.push({
+        name: nm,
+        type: 'line', showSymbol: false, sampling: 'lttb',
+        yAxisIndex: 0, data: isIndex ? g.net_index : g[state.metric],
+        lineStyle: { width: isPrim ? 2.2 : 1.3, color: GROUP_COLORS[i % 4], opacity: isPrim ? 1 : .62 },
+        itemStyle: { color: GROUP_COLORS[i % 4] }, emphasis: { focus: 'series' }
+      });
+      legend.push(nm);
+    });
+  } else {
+    const g = cur.groups[groupKey];
+    const vals = isIndex ? g.net_index : g[state.metric];
+    const nm = g.label + '·' + metricLabel(state.metric);
+    series.push({
+      name: nm,
+      type: 'line', showSymbol: false, sampling: 'lttb', yAxisIndex: 0, data: vals,
+      lineStyle: { width: 2.1 },
+      itemStyle: { color: (state.metric === 'net') ? UP : (state.metric === 'long' ? UP : DOWN) },
+      areaStyle: (state.metric === 'net') ? { opacity: .10 } : null,
+      markLine: isIndex ? {
+        silent: true, symbol: 'none', label: { color: '#8b9bb4', fontSize: 10, formatter: '{c}' },
+        lineStyle: { type: 'dashed', color: '#4a5a77' },
+        data: [{ yAxis: 90 }, { yAxis: 50 }, { yAxis: 10 }]
+      } : {
+        silent: true, symbol: 'none', label: { show: false },
+        lineStyle: { color: '#3a4a66', type: 'solid' }, data: [{ yAxis: 0 }]
+      }
+    });
+    legend.push(nm);
+  }
+  // 价格线（右轴）: 国债可同时叠加「收益率」与「期货绝对价格」两条
+  if (showYield) {
+    series.push({
+      name: cur.price.name, type: 'line', showSymbol: false, sampling: 'lttb',
+      yAxisIndex: 1, data: cur.price_values,
+      lineStyle: { width: 1.8, color: '#f5b942' }, itemStyle: { color: '#f5b942' },
+      emphasis: { focus: 'series' }, z: 3
+    });
+    legend.push(cur.price.name);
+  }
+  if (showFut) {
+    series.push({
+      name: cur.price_alt.name, type: 'line', showSymbol: false, sampling: 'lttb',
+      yAxisIndex: 2, data: cur.price_alt_values,
+      lineStyle: { width: 1.6, color: PXFUT, type: 'dashed' }, itemStyle: { color: PXFUT },
+      emphasis: { focus: 'series' }, z: 2
+    });
+    legend.push(cur.price_alt.name);
+  }
+  const bothPx = showYield && showFut;
+
+  const n = cur.dates.length;
+  const startPct = Math.max(0, (n - 260) / n * 100);
+
+  // 注意: ECharts 5.5.1 的 piecewise visualMap 使用 {gt:0}/{lte:0} 会抛
+  // "Cannot read properties of undefined (reading 'coord')", 必须改用 {min}/{max} 写法。
+  const visualMap = (!showAll && state.metric === 'net' && !isIndex) ? {
+    type: 'piecewise', show: false, seriesIndex: 0, dimension: 1,
+    pieces: [{ min: 0, color: UP }, { max: -0.0001, color: DOWN }]
+  } : null;
+
+  const opt = {
+    backgroundColor: 'transparent',
+    animationDuration: 300,
+    grid: { left: 74, right: bothPx ? 134 : 78, top: 34, bottom: 74 },
+    legend: {
+      data: legend, top: 2, left: 'center', itemWidth: 14, itemHeight: 8,
+      textStyle: { color: '#8b9bb4', fontSize: 11.5 }, icon: 'roundRect'
+    },
+    tooltip: {
+      trigger: 'axis', axisPointer: { type: 'cross', lineStyle: { color: '#3a4a66' } },
+      backgroundColor: 'rgba(12,17,27,.94)', borderColor: '#243044',
+      textStyle: { color: '#e8eef7', fontSize: 12 },
+      formatter: ps => {
+        const d = ps[0].axisValue; const rows = [`<b>${d}</b>`];
+        ps.forEach(p => {
+          const v = p.value; if (v === null || v === undefined) return;
+          let s;
+          if (cur.price_alt && p.seriesName === cur.price_alt.name) s = Number(v).toFixed(3);
+          else if (p.seriesName === cur.price.name) s = fmt(v, 2);
+          else s = fmtSigned(v);
+          rows.push(`${p.marker}${p.seriesName}：<b>${s}</b>`);
+        });
+        return rows.join('<br/>');
+      }
+    },
+    dataZoom: [
+      { type: 'inside', start: startPct, end: 100 },
+      { type: 'slider', start: startPct, end: 100, height: 26, bottom: 18,
+        borderColor: '#243044', backgroundColor: 'rgba(18,24,38,.7)',
+        fillerColor: 'rgba(76,141,255,.16)', handleStyle: { color: '#4c8dff' },
+        moveHandleStyle: { color: '#2b3d5e' },
+        dataBackground: { lineStyle: { color: '#31405c' }, areaStyle: { color: '#1c2740' } },
+        selectedDataBackground: { lineStyle: { color: '#4c8dff' }, areaStyle: { color: '#22355c' } },
+        textStyle: { color: '#7c8ca6', fontSize: 10 },
+        labelFormatter: (v, s) => { const d = cur.dates[Math.round(v)]; return d ? d.slice(0, 7) : ''; }
+      }
+    ],
+    xAxis: {
+      type: 'category', data: cur.dates, boundaryGap: false,
+      axisLine: { lineStyle: { color: '#243044' } },
+      axisLabel: { color: '#7c8ca6', fontSize: 11, formatter: v => v.slice(0, 7) },
+      splitLine: { show: false }
+    },
+    yAxis: [
+      { type: 'value', name: isIndex ? 'COT Index' : '持仓（张）', nameTextStyle: { color: '#7c8ca6', fontSize: 11 },
+        nameGap: 14, scale: true, min: isIndex ? 0 : null, max: isIndex ? 100 : null,
+        axisLabel: { color: '#7c8ca6', fontSize: 11, formatter: v => isIndex ? v : (Math.abs(v) >= 1000 ? (v / 1000) + 'k' : v) },
+        splitLine: { lineStyle: { color: 'rgba(36,48,68,.55)' } } },
+      { type: 'value', name: showYield ? (cur.price.unit === '%' ? '收益率 %' : (cur.price.unit || '价格')) : '',
+        nameTextStyle: { color: '#c9a24a', fontSize: 11 }, show: showYield,
+        scale: true, position: 'right', axisLine: { show: showYield, lineStyle: { color: '#5a4a22' } },
+        axisLabel: { show: showYield, color: '#c9a24a', fontSize: 11 },
+        splitLine: { show: false } },
+      { type: 'value', name: showFut ? ('期货价 ' + (cur.price_alt.unit || '')) : '',
+        nameTextStyle: { color: '#cbd5e1', fontSize: 11 }, show: showFut,
+        scale: true, position: 'right', offset: bothPx ? 62 : 0,
+        axisLine: { show: showFut, lineStyle: { color: '#3b4a63' } },
+        axisLabel: { show: showFut, color: '#cbd5e1', fontSize: 11, formatter: v => Number(v).toFixed(1) },
+        splitLine: { show: false } }
+    ],
+    series
+  };
+  if (visualMap) opt.visualMap = visualMap;
+  if (!window.__chart) { window.__chart = echarts.init(document.getElementById('chart'), null, { renderer: 'canvas' }); }
+  window.__chart.setOption(opt, true);
+
+  document.getElementById('m-src').innerHTML =
+    `合约 <b>${cur.contract_code}</b> · ${cur.report_type === 'tff' ? 'TFF' : '分项'}报告`;
+  document.getElementById('f-price').textContent =
+    `价格来源：${cur.price.symbol || '-'}（${cur.price.note || ''}）` +
+    (cur.price_alt ? `　｜　${cur.price_alt.symbol || '-'}（${cur.price_alt.note || ''}）` : '');
+  document.getElementById('f-note').textContent = cur.price_alt
+    ? "注：国债为双口径 —— 收益率与期货价格互为反向（收益率上行＝债券价格下行）；"
+      + "期货价为 CBOT 当月连续合约的十进制点值（104.375 即 104'12，0.375×32=12）。"
+    : '';
+}
+
+function metricLabel(m) { return m === 'net' ? '净持仓' : (m === 'long' ? '多头' : '空头'); }
+
+window.addEventListener('resize', () => { if (window.__chart) window.__chart.resize(); });
+document.addEventListener('DOMContentLoaded', boot);
+if (document.readyState !== 'loading') boot();
+</script>
+</body>
+</html>

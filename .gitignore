@@ -1,0 +1,8 @@
+cache/
+logs/
+*.pyc
+__pycache__/
+_final.png
+*.log
+.workbuddy/
+.probe_cme/

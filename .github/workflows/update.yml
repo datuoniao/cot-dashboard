@@ -1,0 +1,52 @@
+name: update-and-deploy
+
+# 每周六 UTC 01:00 (北京时间周六 09:00) 自动更新数据并重新发布网页；
+# 也可在 Actions 页面手动触发 (workflow_dispatch)，或 push 到 main 时触发。
+on:
+  schedule:
+    - cron: '0 1 * * 6'
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      # 三个脚本均为标准库实现, 无需 pip install。
+      # 任一脚本整体失败会以非零码退出, 工作流中止, 线上保留上一份好数据。
+      - name: fetch CFTC positions
+        run: python fetch_positions.py
+
+      - name: fetch prices
+        run: python fetch_prices.py
+
+      - name: build dashboard data
+        run: python build_data.py
+
+      - name: upload pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+
+      - name: deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
