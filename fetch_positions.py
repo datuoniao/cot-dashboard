@@ -19,7 +19,7 @@ CFTC Commitments of Traders - 持仓采集
   * 不同年份文件表头有差异 (Report_Date_as_YYYY-MM-DD / Report_Date_as_MM_DD_YYYY,
     值格式甚至与列名不符), 因此统一用 As_of_Date_In_Form_YYMMDD (6位 YYMMDD) 作为日期主键。
   * 字段可能带引号或前后空格, 使用 csv 模块解析 (所有行列数一致, 无逗号错位风险)。
-  * Ultra UST Bond (020604) 2010-01 才上市, 故其历史自 2010-03 起, 周数少于其他品种。
+  * 原糖 No.11 (080732, ICE Futures U.S.) 同属分项报告, 历史自 2006-06 起。
 
 输出: data/positions.json
 """
@@ -70,9 +70,9 @@ TARGETS = {
     "silver":   ("disaggregated", "084691"),   # 白银 COMEX
     "crude":    ("disaggregated", "067651"),   # WTI 原油 NYMEX
     "soybean":  ("disaggregated", "005602"),   # 美豆 CBOT
+    "sugar":    ("disaggregated", "080732"),   # 原糖 No.11 ICE Futures U.S.
     "us10y":    ("tff",           "043602"),   # 10 年期美债期货 CBOT
     "us30y":    ("tff",           "020601"),   # 30 年期美债期货 CBOT
-    "us_ultra": ("tff",           "020604"),   # 超长期美债期货 CBOT (2010 上市)
 }
 
 # 各报告类型关注的交易员类别 -> 字段基名 (不含 _Positions_<side>_All)

@@ -24,9 +24,9 @@ DISPLAY = {
     "silver":   {"name": "白银",           "price_name": "伦敦银现",       "primary": "m_money"},
     "crude":    {"name": "原油",           "price_name": "NYMEX原油连续",  "primary": "m_money"},
     "soybean":  {"name": "美豆",           "price_name": "CBOT大豆连续",   "primary": "m_money"},
+    "sugar":    {"name": "原糖",           "price_name": "ICE原糖期货主力", "primary": "m_money"},
     "us10y":    {"name": "美国十年期国债",  "price_name": "10年期美债收益率", "primary": "lev_money"},
     "us30y":    {"name": "美国30年期国债",  "price_name": "30年期美债收益率", "primary": "lev_money"},
-    "us_ultra": {"name": "美国超长期国债",  "price_name": "30年期美债收益率", "primary": "lev_money"},
 }
 
 GROUP_LABELS = {

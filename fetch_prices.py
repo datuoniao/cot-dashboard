@@ -6,14 +6,13 @@
   silver  : 东方财富 现货白银/美元   122.XAG      ~1992 至今
   crude   : 东方财富 NYMEX原油连续   102.CL00Y    ~1986 至今
   soybean : 东方财富 CBOT大豆连续    103.ZS00Y    ~2006 至今 (美分/蒲式耳)
+  sugar   : Yahoo Finance ICE11号原糖 SB=F       ~2000 至今 (美分/磅)
   us10y   : 美国财政部 每日国债收益率曲线 CSV (取 "10 Yr" 列, 单位 %)
   us30y   : 同上 CSV, 取 "30 Yr" 列
-  us_ultra: 同上 CSV, 取 "30 Yr" 列 (财政部无超长期收益率, 用 30Y 作同久期代理)
 
 国债的【第二价格口径】(ALT): 国债期货本身的绝对价格 (点), 与收益率口径互为镜像
   us10y    -> 东方财富 103.TY00Y  CBOT 10 年期美债期货当月连续
   us30y    -> 东方财富 103.US00Y  CBOT 30 年期美债期货当月连续
-  us_ultra -> 东方财富 103.UL00Y  CBOT 超长期美债期货当月连续
   注: 东财外盘代码不用 CME 的 ZN/ZB/UB 命名, 而用 TY/US/UL (均属市场 103 = CBOT),
       报价为十进制点值 (104.375 即 104'12, 0.375*32=12)。
 
@@ -25,6 +24,8 @@
     保留上一份可用数据 (避免空序列覆盖 + 看板静默失真)。
   * 部分失败: 同一数据源中部分品种取不到 -> 沿用上一份 prices.json 中该品种的序列,
     避免个别合约抖动导致整条价格线中断 (日志会打印"沿用上次"提示)。
+  * 原糖: 唯一走 Yahoo 的品种(东财无此品种)。取不到时沿用上一份序列, 但【不】触发中止 ——
+    单一品种失败不应导致整站停更。
 """
 import csv
 import io
@@ -65,7 +66,6 @@ YAHOO_SYMBOLS = {
     "103.ZS00Y": "ZS=F",   # CBOT 大豆主力
     "103.TY00Y": "ZN=F",   # CBOT 10 年期国债期货
     "103.US00Y": "ZB=F",   # CBOT 30 年期国债期货
-    "103.UL00Y": "UB=F",   # CBOT 超长期国债期货
 }
 
 try:
@@ -87,20 +87,19 @@ META = {
     "silver":   ("白银",          "eastmoney", "122.XAG",    "美元/盎司",   "伦敦银现"),
     "crude":    ("原油",          "eastmoney", "102.CL00Y",  "美元/桶",     "NYMEX 原油连续"),
     "soybean":  ("美豆",          "eastmoney", "103.ZS00Y",  "美分/蒲式耳", "CBOT 大豆连续"),
+    "sugar":    ("原糖",          "yahoo",     "SB=F",       "美分/磅",     "ICE 11号原糖期货主力(连续)"),
     "us10y":    ("美国十年期国债", "ust", "10Y_YIELD", "%", "10年期美债收益率(与期货价格反向)"),
     "us30y":    ("美国30年期国债", "ust", "30Y_YIELD", "%", "30年期美债收益率(与期货价格反向)"),
-    "us_ultra": ("美国超长期国债", "ust", "30Y_YIELD", "%", "30年期美债收益率(代理, 与期货价格反向)"),
 }
 
-# 美国财政部 CSV 中对应的列名 (财政部不发布 "超长期" 收益率, 用 30Y 作同久期代理)
-UST_COLUMNS = {"us10y": "10 Yr", "us30y": "30 Yr", "us_ultra": "30 Yr"}
+# 美国财政部 CSV 中对应的列名
+UST_COLUMNS = {"us10y": "10 Yr", "us30y": "30 Yr"}
 
 # 国债的第二个价格口径: 期货绝对价格 (点)
 # 品种 -> (显示名, 源, 符号, 单位, 说明)
 ALT = {
     "us10y":    ("10年期美债期货", "eastmoney", "103.TY00Y", "点", "CBOT 10年期美债期货当月连续"),
     "us30y":    ("30年期美债期货", "eastmoney", "103.US00Y", "点", "CBOT 30年期美债期货当月连续"),
-    "us_ultra": ("超长期美债期货", "eastmoney", "103.UL00Y", "点", "CBOT 超长期美债期货当月连续"),
 }
 
 
@@ -246,6 +245,8 @@ def main():
     for key, (name, source, symbol, unit, note) in META.items():
         if source == "eastmoney":
             series, src_used = fetch_price_series(symbol)
+        elif source == "yahoo":
+            series, src_used = fetch_yahoo(symbol), "yahoo"
         else:
             series, src_used = ust.get(UST_COLUMNS.get(key, ""), {}), "ust"
         dates = sorted(series)
@@ -320,6 +321,11 @@ def main():
         if empty_alt and ok_alt:
             for k in empty_alt:
                 _carry(k, "alt")
+
+    # 原糖: 唯一走 Yahoo 的品种(东财无此品种), 取不到时沿用上一份旧序列。
+    # 注意: 不纳入上面的"整体失败"中止判断 —— 糖价单点失败不应导致整站停更。
+    if "sugar" in result["instruments"] and not result["instruments"]["sugar"]["series"]:
+        _carry("sugar")
 
     if carried:
         print("[fetch_prices] 注意: 部分品种本次无返回, 已沿用上一份序列 -> " + "; ".join(carried),
