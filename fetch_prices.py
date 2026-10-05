@@ -55,10 +55,15 @@ UST_CSV = ("https://home.treasury.gov/resource-center/data-chart-center/"
            "interest-rates/daily-treasury-rates.csv/{y}/all"
            "?type=daily_treasury_yield_curve&field_tdr_date_value={y}&page&_format=csv")
 
-# 备用源: Yahoo Finance (东方财富会屏蔽 GitHub Actions 的美国机房 IP,
-# runner 上东财全部无数据时自动切换到 Yahoo)
+# 备用源: Yahoo Finance (东方财富会屏蔽 GitHub Actions 的美国机房 IP, runner 上东财失败时自动切换)
+# 注意: 用 range=max&interval=1d 会被 Yahoo 静默降采样成【月线】(每年约 10 点),
+#       因此改为按年份【分段】请求日线 (period1/period2), 保证周度看板有足够价格密度。
 YM_KLINE = ("https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
-            "?range=max&interval=1d&includePrePost=false")
+            "?period1={p1}&period2={p2}&interval=1d&includePrePost=false")
+YM_FALLBACK = ("https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
+               "?range=max&interval=1d&includePrePost=false")
+YAHOO_START_YEAR = 2000
+YAHOO_CHUNK_YEARS = 3        # 每段 3 年 (约 750 个日线点), 规避 Yahoo 的采样上限
 YAHOO_SYMBOLS = {
     "122.XAU":   "GC=F",   # COMEX 黄金期货主力
     "122.XAG":   "SI=F",   # COMEX 白银期货主力
@@ -124,13 +129,7 @@ def http_get(url: str, timeout: int = 60) -> bytes | None:
 EM_DELAY = 1.2
 
 
-def fetch_yahoo(sym: str) -> dict:
-    """Yahoo v8 chart -> {date: close} (仅收非空收盘价)"""
-    url = YM_KLINE.format(sym=urllib.parse.quote(sym))
-    blob = http_get(url)
-    time.sleep(EM_DELAY)
-    if not blob:
-        return {}
+def _yahoo_parse(blob: bytes) -> dict:
     try:
         d = json.loads(blob.decode("utf-8", "replace"))
         res = (d.get("chart") or {}).get("result") or []
@@ -149,6 +148,37 @@ def fetch_yahoo(sym: str) -> dict:
             out[_yahoo_ts_to_date(ts)] = float(c)
         except (ValueError, OverflowError):
             continue
+    return out
+
+
+def _yahoo_request(url: str) -> dict:
+    blob = http_get(url)
+    time.sleep(EM_DELAY)
+    return _yahoo_parse(blob) if blob else {}
+
+
+def fetch_yahoo(sym: str) -> dict:
+    """Yahoo 日线 -> {date: close}。
+
+    分段请求: Yahoo 对 range=max 的日线会静默降采样为月线, 必须按 3 年一段
+    (period1/period2) 逐段拉取再合并; 若分段全部失败, 退回 range=max 单次请求
+    (至少有月线密度, 好过没数据)。
+    """
+    quoted = urllib.parse.quote(sym)
+    now = int(time.time())
+    out = {}
+    y = YAHOO_START_YEAR
+    this_year = datetime.now().year
+    while y <= this_year:
+        try:
+            p1 = int(datetime(y, 1, 1).timestamp())
+            p2 = int(datetime(min(y + YAHOO_CHUNK_YEARS, this_year + 1), 1, 1).timestamp())
+        except (ValueError, OverflowError):
+            break
+        out.update(_yahoo_request(YM_KLINE.format(sym=quoted, p1=p1, p2=min(p2, now))))
+        y += YAHOO_CHUNK_YEARS
+    if not out:
+        out = _yahoo_request(YM_FALLBACK.format(sym=quoted))
     return out
 
 
