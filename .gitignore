@@ -6,3 +6,4 @@ _final.png
 *.log
 .workbuddy/
 .probe_cme/
+*.bak
